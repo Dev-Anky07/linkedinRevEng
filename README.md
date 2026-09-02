@@ -13,9 +13,9 @@ The API currently returns data that has been verified against captured profile r
 
 - Name, headline, location, and profile image metadata
 - Experience
+- Certifications
+- Skills
 - Languages
-
-Certifications and skills are fetched by the pipeline but are intentionally not displayed until their parsers are reliable.
 
 ## Local setup
 

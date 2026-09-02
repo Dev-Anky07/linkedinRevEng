@@ -3,8 +3,21 @@ from urllib.parse import urlencode
 import httpx
 
 from app.linkedin_client import LinkedInClient
-from app.parsers import parse_certifications, parse_experience, parse_languages_rsc, parse_profile_page, parse_skills
-from app.rsc import LANGUAGES_PAGER_ID, build_languages_request_body, build_languages_rsc_headers, build_pagination_path
+from app.parsers import parse_experience, parse_languages_rsc, parse_profile_page
+from app.rsc import (
+    CERTIFICATIONS_PAGER_ID,
+    LANGUAGES_PAGER_ID,
+    SKILLS_PAGER_ID,
+    build_certifications_request_body,
+    build_certifications_rsc_headers,
+    build_languages_request_body,
+    build_languages_rsc_headers,
+    build_pagination_path,
+    build_skills_request_body,
+    build_skills_rsc_headers,
+    parse_certifications_rsc,
+    parse_skills_rsc,
+)
 from app.session_repository import RedisSessionRepository
 
 
@@ -57,8 +70,8 @@ class ProfilePipeline:
             await self._checkpoint()
 
         await self._fetch_optional_section(result, "experience", f"/in/{username}/details/experience/", parse_experience)
-        await self._fetch_optional_section(result, "certifications", f"/in/{username}/details/certifications/", parse_certifications)
-        await self._fetch_optional_section(result, "skills", f"/in/{username}/details/skills/", parse_skills)
+        await self._fetch_certifications(result, username)
+        await self._fetch_skills(result, username)
         await self._fetch_languages(result, username)
         return result
 
@@ -103,5 +116,68 @@ class ProfilePipeline:
             status = error.response.status_code if getattr(error, "response", None) else "network error"
             result["meta"]["sections"][section] = "unavailable"
             result["meta"]["warnings"].append(f"Languages could not be fetched ({status}).")
+        finally:
+            await self._checkpoint()
+
+    async def _fetch_certifications(self, result: dict, username: str) -> None:
+        section = "certifications"
+        details_path = f"/in/{username}/details/certifications/"
+        try:
+            details_response = await self._client.get(details_path)
+            await self._checkpoint()
+
+            pagination_path = build_pagination_path(details_response.text, CERTIFICATIONS_PAGER_ID)
+            request_body = build_certifications_request_body(details_response.text, username)
+            page_headers = build_certifications_rsc_headers(details_response.text)
+            if not pagination_path or not request_body or not page_headers:
+                result["meta"]["sections"][section] = "rsc_request_unresolved"
+                result["meta"]["warnings"].append("Certifications pagination metadata was not found in the details response.")
+                return
+
+            rsc_response = await self._client.get_rsc_pagination(pagination_path, details_path, request_body, page_headers)
+            result[section] = parse_certifications_rsc(rsc_response.text)
+            result["meta"]["sections"][section] = "parsed" if result[section] else "rsc_fetched_no_data"
+        except httpx.HTTPError as error:
+            status = error.response.status_code if getattr(error, "response", None) else "network error"
+            result["meta"]["sections"][section] = "unavailable"
+            result["meta"]["warnings"].append(f"Certifications could not be fetched ({status}).")
+        finally:
+            await self._checkpoint()
+
+    async def _fetch_skills(self, result: dict, username: str) -> None:
+        section = "skills"
+        details_path = f"/in/{username}/details/skills/"
+        try:
+            details_response = await self._client.get(details_path)
+            await self._checkpoint()
+
+            pagination_path = build_pagination_path(details_response.text, SKILLS_PAGER_ID)
+            request_body = build_skills_request_body(details_response.text, username)
+            page_headers = build_skills_rsc_headers(details_response.text)
+            if not pagination_path or not request_body or not page_headers:
+                result["meta"]["sections"][section] = "rsc_request_unresolved"
+                result["meta"]["warnings"].append("Skills pagination metadata was not found in the details response.")
+                return
+
+            payload = request_body["clientArguments"]["payload"]
+            page_size = int(payload.get("count", 10))
+            all_skills: list[str] = []
+            # The details page asks for the first batch; additional calls use
+            # the same pager with increasing offsets. A small hard limit keeps
+            # one public API request bounded if LinkedIn changes pagination.
+            for _ in range(5):
+                rsc_response = await self._client.get_rsc_pagination(pagination_path, details_path, request_body, page_headers)
+                page_skills = parse_skills_rsc(rsc_response.text)
+                all_skills.extend(skill for skill in page_skills if skill not in all_skills)
+                if len(page_skills) < page_size:
+                    break
+                payload["start"] = int(payload.get("start", 0)) + page_size
+
+            result[section] = all_skills
+            result["meta"]["sections"][section] = "parsed" if result[section] else "rsc_fetched_no_data"
+        except httpx.HTTPError as error:
+            status = error.response.status_code if getattr(error, "response", None) else "network error"
+            result["meta"]["sections"][section] = "unavailable"
+            result["meta"]["warnings"].append(f"Skills could not be fetched ({status}).")
         finally:
             await self._checkpoint()

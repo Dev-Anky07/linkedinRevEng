@@ -16,6 +16,10 @@ from urllib.parse import urlencode
 PAGINATION_PATH = "/flagship-web/rsc-action/actions/pagination"
 LANGUAGES_PAGER_ID = "com.linkedin.sdui.pagers.profile.details.languages"
 LANGUAGES_SCREEN_ID = "com.linkedin.sdui.flagshipnav.profile.ProfileLanguageDetails"
+CERTIFICATIONS_PAGER_ID = "com.linkedin.sdui.pagers.profile.details.certifications"
+CERTIFICATIONS_SCREEN_ID = "com.linkedin.sdui.flagshipnav.profile.ProfileCertificationDetails"
+SKILLS_PAGER_ID = "com.linkedin.sdui.pagers.profile.details.skills"
+SKILLS_SCREEN_ID = "com.linkedin.sdui.flagshipnav.profile.ProfileSkillDetails"
 
 
 def build_pagination_path(document: str, pager_id: str) -> str | None:
@@ -41,9 +45,21 @@ def build_pagination_path(document: str, pager_id: str) -> str | None:
 
 
 def build_languages_request_body(document: str, username: str) -> dict | None:
-    """Build the POST JSON body from current details-page pagination metadata."""
+    return build_section_request_body(document, username, LANGUAGES_PAGER_ID, LANGUAGES_SCREEN_ID)
+
+
+def build_certifications_request_body(document: str, username: str) -> dict | None:
+    return build_section_request_body(document, username, CERTIFICATIONS_PAGER_ID, CERTIFICATIONS_SCREEN_ID)
+
+
+def build_skills_request_body(document: str, username: str) -> dict | None:
+    return build_section_request_body(document, username, SKILLS_PAGER_ID, SKILLS_SCREEN_ID)
+
+
+def build_section_request_body(document: str, username: str, pager_id: str, screen_id: str) -> dict | None:
+    """Build a POST body from current details-page pagination metadata."""
     normalized = unescape(document).replace(r'\"', '"')
-    pager_index = normalized.find(f'"pagerId":"{LANGUAGES_PAGER_ID}"')
+    pager_index = normalized.find(f'"pagerId":"{pager_id}"')
     if pager_index < 0:
         return None
 
@@ -64,6 +80,9 @@ def build_languages_request_body(document: str, username: str) -> dict | None:
         "count": read_number("count", 10),
         "profileId": profile_id_match.group(1),
     }
+    filter_match = re.search(r'"filter"\s*:\s*"([^"\\]+)"', pager_block)
+    if filter_match:
+        payload["filter"] = filter_match.group(1)
     requested_arguments = {
         "$type": "proto.sdui.actions.requests.RequestedArguments",
         "requestedStateKeys": [],
@@ -71,16 +90,16 @@ def build_languages_request_body(document: str, username: str) -> dict | None:
         "requestMetadata": {"$type": "proto.sdui.common.RequestMetadata"},
     }
     return {
-        "pagerId": LANGUAGES_PAGER_ID,
+        "pagerId": pager_id,
         "clientArguments": {
             **requested_arguments,
             "states": [],
-            "screenId": LANGUAGES_SCREEN_ID,
+            "screenId": screen_id,
             "knownTemplateIds": [],
         },
         "paginationRequest": {
             "$type": "proto.sdui.actions.requests.PaginationRequest",
-            "pagerId": LANGUAGES_PAGER_ID,
+            "pagerId": pager_id,
             "trigger": {
                 "$case": "itemDistanceTrigger",
                 "itemDistanceTrigger": {
@@ -96,7 +115,19 @@ def build_languages_request_body(document: str, username: str) -> dict | None:
 
 
 def build_languages_rsc_headers(document: str) -> dict[str, str] | None:
-    """Derive page-context headers from the current Languages HTML response."""
+    return build_section_rsc_headers(document, "d_flagship3_profile_view_base_languages_details")
+
+
+def build_certifications_rsc_headers(document: str) -> dict[str, str] | None:
+    return build_section_rsc_headers(document, "d_flagship3_profile_view_base_certifications_details")
+
+
+def build_skills_rsc_headers(document: str) -> dict[str, str] | None:
+    return build_section_rsc_headers(document, "d_flagship3_profile_view_base_skills_details")
+
+
+def build_section_rsc_headers(document: str, anchor_key: str) -> dict[str, str] | None:
+    """Derive page-context headers from the current section details-page HTML."""
     meta_match = re.search(
         r'<meta[^>]+name=["\']como-t["\'][^>]+content=["\']([^"\']+)["\']',
         document,
@@ -121,7 +152,6 @@ def build_languages_rsc_headers(document: str) -> dict[str, str] | None:
     except (KeyError, json.JSONDecodeError):
         return None
 
-    anchor_key = "d_flagship3_profile_view_base_languages_details"
     headers = {
         "x-li-anchor-page-key": anchor_key,
         "x-li-application-instance": application_instance,
@@ -173,6 +203,148 @@ def parse_languages_rsc(payload: str) -> list[dict[str, str]]:
         if text != "Languages" and proficiency_pattern.match(proficiency):
             languages.append({"name": text, "proficiency": proficiency})
     return languages
+
+
+def parse_certifications_rsc(payload: str) -> list[dict[str, str | None]]:
+    """Extract certification cards from a React Flight/RSC pagination response.
+
+    LinkedIn represents each card's title and issuer as adjacent paragraph
+    elements. Issue date and credential ID are rendered via referenced text
+    components, so the walker resolves those references in document order.
+    """
+    events = _collect_certification_events(payload)
+    certifications: list[dict[str, str | None]] = []
+    current: dict[str, str | None] | None = None
+
+    def finish_current() -> None:
+        nonlocal current
+        if current and current.get("name") and current.get("issuer"):
+            certifications.append(current)
+        current = None
+
+    for kind, text in events:
+        if kind == "title":
+            finish_current()
+            current = {"name": text, "issuer": None, "issuedDate": None, "credentialId": None}
+        elif kind == "issuer" and current and current["issuer"] is None:
+            current["issuer"] = text
+        elif kind == "issued" and current:
+            current["issuedDate"] = text.removeprefix("Issued ")
+        elif kind == "credential_id" and current:
+            current["credentialId"] = text.removeprefix("Credential ID ")
+
+    finish_current()
+    return certifications
+
+
+def parse_skills_rsc(payload: str) -> list[str]:
+    """Extract skill titles from a React Flight/RSC pagination response."""
+    skills: list[str] = []
+    for line in payload.splitlines():
+        if ":" not in line:
+            continue
+        _, raw_value = line.split(":", 1)
+        try:
+            value = json.loads(raw_value)
+        except json.JSONDecodeError:
+            continue
+        if not _has_skill_component(value):
+            continue
+        text_values: list[str] = []
+        _collect_text_prop_values(value, text_values)
+        # The first text component is the skill title. Later text components
+        # can describe an endorsement or the role where it was used.
+        if text_values:
+            skills.append(text_values[0])
+
+    # Definitions can be referenced more than once; retain first occurrence.
+    return list(dict.fromkeys(skill for skill in skills if skill))
+
+
+def _collect_certification_events(payload: str) -> list[tuple[str, str]]:
+    definitions: dict[str, Any] = {}
+    root: Any = None
+    for line in payload.splitlines():
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        try:
+            value = json.loads(raw_value)
+        except json.JSONDecodeError:
+            continue
+        definitions[key] = value
+        if key == "0":
+            root = value
+
+    events: list[tuple[str, str]] = []
+
+    def walk(value: Any, resolving: set[str]) -> None:
+        if isinstance(value, str):
+            reference = re.fullmatch(r"\$L([0-9a-z]+)", value)
+            if reference and reference.group(1) in definitions and reference.group(1) not in resolving:
+                walk(definitions[reference.group(1)], resolving | {reference.group(1)})
+            return
+
+        if isinstance(value, list):
+            if len(value) == 4 and value[0] == "$" and value[1] == "p" and isinstance(value[3], dict):
+                props = value[3]
+                text = _read_text(props.get("children"))
+                if text:
+                    # The title paragraph is visually styled; an issuer is the
+                    # following unstyled paragraph. Orphan paragraphs are media
+                    # captions and are ignored by the state machine above.
+                    events.append(("title" if props.get("style") else "issuer", text))
+            for item in value:
+                walk(item, resolving)
+            return
+
+        if isinstance(value, dict):
+            text_props = value.get("textProps")
+            if isinstance(text_props, dict):
+                text = _read_text(text_props.get("children"))
+                if text.startswith("Issued "):
+                    events.append(("issued", text))
+                elif text.startswith("Credential ID "):
+                    events.append(("credential_id", text))
+            for item in value.values():
+                walk(item, resolving)
+
+    if root is not None:
+        walk(root, set())
+    return events
+
+
+def _read_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return "".join(value).strip()
+    return ""
+
+
+def _has_skill_component(value: Any) -> bool:
+    if isinstance(value, dict):
+        component_key = value.get("componentKey") or value.get("componentkey")
+        if isinstance(component_key, str) and component_key.startswith("com.linkedin.sdui.profile.skill("):
+            return True
+        return any(_has_skill_component(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_skill_component(item) for item in value)
+    return False
+
+
+def _collect_text_prop_values(value: Any, output: list[str]) -> None:
+    if isinstance(value, dict):
+        text_props = value.get("textProps")
+        if isinstance(text_props, dict):
+            text = _read_text(text_props.get("children"))
+            if text:
+                output.append(text)
+        for item in value.values():
+            _collect_text_prop_values(item, output)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_text_prop_values(item, output)
 
 
 def _collect_paragraph_text(value: Any, output: list[str]) -> None:
