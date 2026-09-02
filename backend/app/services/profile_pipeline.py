@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 import httpx
 
 from app.linkedin_client import LinkedInClient
@@ -44,6 +46,7 @@ class ProfilePipeline:
                 image_bytes, content_type = image
                 result["profile"]["profileImage"] = {
                     "url": image_url,
+                    "proxyPath": f"/api/v1/profile-image?{urlencode({'source': image_url})}",
                     "contentType": content_type,
                     "sizeBytes": len(image_bytes),
                 }

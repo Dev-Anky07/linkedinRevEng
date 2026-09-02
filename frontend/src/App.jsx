@@ -25,7 +25,9 @@ function initials(name = '') { return name.split(/\s+/).filter(Boolean).slice(0,
 
 function normalizeResponse(data) {
   const profile = data.profile ?? {};
-  return { name: profile.name ?? 'Profile found', headline: profile.headline ?? '', location: profile.location ?? '', imageUrl: profile.profileImage?.url ?? profile.profileImageUrl ?? null, imageMeta: profile.profileImage ?? null, experience: Array.isArray(data.experience) ? data.experience : [], languages: Array.isArray(data.languages) ? data.languages : [], sections: data.meta?.sections ?? {}, warnings: data.meta?.warnings ?? [] };
+  const proxyPath = profile.profileImage?.proxyPath;
+  const imageUrl = proxyPath ? `${apiBaseUrl}${proxyPath}` : (profile.profileImage?.url ?? profile.profileImageUrl ?? null);
+  return { name: profile.name ?? 'Profile found', headline: profile.headline ?? '', location: profile.location ?? '', imageUrl, imageMeta: profile.profileImage ?? null, experience: Array.isArray(data.experience) ? data.experience : [], languages: Array.isArray(data.languages) ? data.languages : [], sections: data.meta?.sections ?? {}, warnings: data.meta?.warnings ?? [] };
 }
 
 async function lookupProfile(linkedinUrl) {

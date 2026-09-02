@@ -116,6 +116,10 @@ Example response shape:
 
 Interactive local API documentation is available at `http://127.0.0.1:8000/docs`.
 
+### `GET /api/v1/profile-image`
+
+The profile response includes a `profileImage.proxyPath` when an image is available. The frontend uses this API route to render the image through the authenticated backend; it does not expose LinkedIn cookies to the browser.
+
 ## Architecture
 
 1. The frontend posts a LinkedIn `/in/{username}` URL to FastAPI.

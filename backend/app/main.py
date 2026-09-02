@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, HttpUrl
 
 from app.config import get_settings
@@ -19,6 +20,7 @@ session_lock = RedisSessionLock(settings.redis_url, settings.linkedin_session_id
 app = FastAPI(title="Profilely API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=False, allow_methods=["POST", "GET"], allow_headers=["Content-Type"])
 USERNAME_PATTERN = re.compile(r"^/in/([A-Za-z0-9_-]+)/?$")
+LINKEDIN_MEDIA_HOST = "media.licdn.com"
 
 class ProfileRequest(BaseModel):
     linkedinUrl: HttpUrl
@@ -31,6 +33,12 @@ def extract_username(linkedin_url: str) -> str:
     if not match:
         raise ValueError("A LinkedIn /in/{username} URL is required.")
     return match.group(1)
+
+
+def is_linkedin_media_url(image_url: str) -> bool:
+    """Only proxy HTTPS LinkedIn CDN media; never act as a general URL fetcher."""
+    parsed = urlparse(image_url)
+    return parsed.scheme == "https" and parsed.hostname == LINKEDIN_MEDIA_HOST and parsed.port is None
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -63,3 +71,40 @@ async def fetch_profile(payload: ProfileRequest) -> dict[str, object]:
     except httpx.HTTPError as error:
         raise HTTPException(status_code=502, detail="LinkedIn returned an upstream request error.") from error
     return {"data": result}
+
+
+@app.get("/api/v1/profile-image")
+async def proxy_profile_image(source: HttpUrl) -> Response:
+    """Stream a previously discovered LinkedIn profile image through the API.
+
+    LinkedIn media requests require the server-side session cookies, which the
+    browser must never receive. The URL validation keeps this endpoint from
+    being used as an arbitrary outbound-request proxy.
+    """
+    image_url = str(source)
+    if not is_linkedin_media_url(image_url):
+        raise HTTPException(status_code=400, detail="Only media.licdn.com image URLs are allowed.")
+
+    try:
+        with session_lock.hold():
+            session = repository.load()
+            client = LinkedInClient(session, settings.linkedin_session_id)
+            try:
+                image = await client.fetch_image_bytes(image_url)
+            finally:
+                repository.save(client.session_payload())
+                await client.close()
+    except SessionBusyError as error:
+        raise HTTPException(status_code=429, detail=str(error)) from error
+    except SessionNotFoundError as error:
+        raise HTTPException(status_code=503, detail="LinkedIn session has not been bootstrapped.") from error
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Profile image is unavailable.")
+
+    image_bytes, content_type = image
+    return Response(
+        content=image_bytes,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
