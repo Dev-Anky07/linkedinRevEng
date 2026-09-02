@@ -1,80 +1,164 @@
-# CodeReview OpenEnv
+# Profilely
 
-Real-world code-review environment with three difficulty-ranked pull requests. Agents inspect diffs, flag issues with line/severity, ask clarifying questions, and decide approve vs. request_changes. Deterministic graders provide shaped rewards for partial progress, and a FastAPI server plus Dockerfile make it Hugging Face Space ready.
+Profilely is a small full-stack LinkedIn profile lookup tool. It accepts a public LinkedIn profile URL, runs a server-side sequential retrieval pipeline using a stored authenticated browser session, and returns structured profile data.
 
-## Why this environment?
-Code review is a core agent workflow: catching bugs, perf and security risks, and avoiding noisy false positives. The tasks model realistic PRs (style/docs, logic correctness, security/performance), with deterministic scoring that rewards precision and penalizes missed critical issues.
+The repository contains two deployable applications:
 
-## Action & Observation spaces
-- Observation (`code_review_env.models.Observation`)
-  - `task_id` (str), `difficulty` (str)
-  - `files` (list[{path, before, after}])
-  - `tests_status` (pass|fail|not_run), `checklist` (list[str])
-  - `step` (int), `max_steps` (int), `ground_truth_count` (int)
-  - `feedback` (list[str]) formative hints
-- Action (`code_review_env.models.Action`)
-  - `findings` (list[{path:str, line:int, severity:nit|minor|major|critical, title:str, message:str}])
-  - `decision` (approve|request_changes|null)
-  - `questions` (optional list[str])
-- Reward: shaped each step using TP/FP weights, miss penalties, decision consistency, question bonus, and a small step cost.
+- `src/` — Vite + React frontend.
+- `backend/` — FastAPI API and encrypted Redis session management.
 
-## Tasks & graders
-1. **easy_style_docs** — renamed email helper; docstring stale + missing type hints. Expect two nits. Penalties for false positives.
-2. **medium_logic_correctness** — pagination off-by-one and missing None guard before `.lower()`. Two majors; request_changes encouraged if missed.
-3. **hard_security_perf** — SQL injection via f-string + N+1 profile query; harmless audit log line. Critical + major with bonus for recommending parameterized query; approving while missing the critical is penalized.
-Graders are deterministic with explicit weights per issue; line matching ±1 and severity calibration produce partial credit.
+## Current response coverage
 
-## Project layout
-- `code_review_env/` — environment package (models, tasks, env logic)
-- `code_review_env/server/app.py` — FastAPI reset/step/state endpoints
-- `openenv.yaml` — OpenEnv metadata
-- `baseline.py` — baseline agent (OpenAI API or heuristic fallback)
-- `Dockerfile` — container entrypoint `uvicorn code_review_env.server.app:app`
-- `requirements.txt` — dependencies
+The API currently returns data that has been verified against captured profile responses:
 
-## Running locally
+- Name, headline, location, and profile image metadata
+- Experience
+- Languages
+
+Certifications and skills are fetched by the pipeline but are intentionally not displayed until their parsers are reliable.
+
+## Local setup
+
+### 1. Configure secrets
+
+Copy `.env.example` to `.env.local` and fill in the values:
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn code_review_env.server.app:app --host 0.0.0.0 --port 8000
+cp .env.example .env.local
 ```
 
-Quick sanity check:
-```bash
-python - <<'PY'
-from code_review_env.env import CodeReviewEnv
-env = CodeReviewEnv()
-obs = env.reset(task_id="easy_style_docs")
-print("Observation files:", [f.path for f in obs.files])
-result = env.step({
-    "findings": [{"path": "service/emailer.py", "line": 2, "severity": "nit", "title": "Docstring", "message": "Update docstring to new name"}],
-    "decision": None,
-    "questions": ["Should compose_welcome return bool?"]
-})
-print(result)
-print(env.state())
-PY
+Required server-side values:
+
+```text
+REDIS_URL=rediss://...
+SESSION_ENCRYPTION_KEY=base64-encoded-32-byte-key
+LINKEDIN_SESSION_ID=primary
 ```
 
-## Baseline agent
-Runs across all tasks; uses OpenAI if `OPENAI_API_KEY` is set, otherwise a deterministic heuristic.
-```bash
-OPENAI_API_KEY=sk-... python baseline.py
-# or offline
-python baseline.py
-```
-Outputs per-task and average scores.
+Keep the browser-cookie export at `secrets/linkedin-cookies.json`. It is ignored by Git and must never be committed.
 
-## Docker
+### 2. Bootstrap the encrypted cookie jar
+
 ```bash
-docker build -t code-review-openenv .
-docker run -p 8000:8000 code-review-openenv
+PYTHONPATH=backend python3 -m app.scripts.bootstrap_session \
+  --cookies-file secrets/linkedin-cookies.json --force
 ```
 
-## Hugging Face Space
-Mark the Space with tag `openenv` and point to the Dockerfile. The container starts `uvicorn` on port 8000 as required by the spec.
+This encrypts the cookie jar and stores it in Redis. The API reads and updates the same record after each upstream request.
 
-## Notes
-- Episodes end when `decision` is provided or `max_steps` (default 3) is reached.
-- Rewards: TP weighted by issue severity, penalties for misses/FPs, bonus for remediation hints and relevant questions, step cost for verbosity, decision penalty if approving with missed criticals.
-- All graders are deterministic and seeded; `openenv.yaml` declares typed models for automated validation.
+### 3. Run the API
+
+```bash
+PYTHONPATH=backend python3 -m uvicorn app.main:app --port 8000
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+### 4. Run the frontend
+
+```bash
+npm install
+npm run dev
+```
+
+Open the URL Vite prints, normally `http://127.0.0.1:5173/`.
+
+## API
+
+### `POST /api/v1/profiles`
+
+Request body:
+
+```json
+{
+  "linkedinUrl": "https://www.linkedin.com/in/example-profile/"
+}
+```
+
+Example response shape:
+
+```json
+{
+  "data": {
+    "profileUrl": "https://www.linkedin.com/in/example-profile/",
+    "profile": {
+      "name": "Example Person",
+      "headline": "Example headline",
+      "location": "City, Region, Country",
+      "profileImage": {
+        "url": "https://...",
+        "contentType": "image/jpeg",
+        "sizeBytes": 12345
+      }
+    },
+    "experience": [],
+    "languages": [],
+    "certifications": [],
+    "skills": [],
+    "meta": {
+      "sections": {
+        "profile": "parsed",
+        "profileImage": "fetched",
+        "experience": "parsed",
+        "languages": "parsed"
+      },
+      "warnings": []
+    }
+  }
+}
+```
+
+Interactive local API documentation is available at `http://127.0.0.1:8000/docs`.
+
+## Architecture
+
+1. The frontend posts a LinkedIn `/in/{username}` URL to FastAPI.
+2. The API validates the URL and extracts the username.
+3. A Redis lock serializes access to the shared LinkedIn session.
+4. The API loads the AES-GCM encrypted cookie jar from Redis.
+5. Sequential upstream requests are made; the latest cookies are persisted after each checkpoint.
+6. Parsers return structured data to the frontend.
+
+## Deploying to Vercel
+
+Deploy the same GitHub repository as **two Vercel projects**.
+
+### Backend project
+
+- Root Directory: `backend`
+- FastAPI entrypoint: `app.main:app` (configured in `backend/pyproject.toml`)
+- Production variables:
+  - `REDIS_URL` — Sensitive
+  - `SESSION_ENCRYPTION_KEY` — Sensitive
+  - `LINKEDIN_SESSION_ID=primary`
+  - `CORS_ORIGINS=https://your-frontend.vercel.app`
+
+### Frontend project
+
+- Root Directory: repository root
+- Framework: Vite
+- Build Command: `npm run build`
+- Output Directory: `dist`
+- Production variable:
+  - `VITE_API_BASE_URL=https://your-api.vercel.app`
+
+`VITE_*` variables are embedded in the browser build. Never place credentials, cookie JSON, Redis URLs, or encryption keys in a `VITE_*` variable.
+
+If production uses a new Redis database, session ID, or encryption key, run the bootstrap script once with the production values before making API requests.
+
+## Limitations
+
+- LinkedIn’s response structure can change; parsers should be maintained alongside new fixtures.
+- A single stored session is serialized with a Redis lock, so concurrent lookups wait rather than sharing cookie updates unsafely.
+- The tool only returns fields visible to the authenticated session and currently exposes only the parser-verified fields in the UI.
+- Use must comply with LinkedIn’s applicable terms, privacy obligations, and the laws relevant to your users and deployment.
+
+## Security
+
+- Browser cookies are not stored in the repository or sent to the frontend.
+- Redis stores the cookie jar as an AES-GCM encrypted record.
+- Rotate the encryption key deliberately: existing session records must be re-bootstrapped after a key rotation.
