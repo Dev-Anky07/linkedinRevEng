@@ -116,6 +116,37 @@ Example response shape:
 
 Interactive local API documentation is available at `http://127.0.0.1:8000/docs`.
 
+The deployed API accepts the same JSON body at `https://linkedinreveng-api.vercel.app/api/v1/profiles`.
+
+#### Calling the deployed API
+
+To call the API, send one JSON field: `linkedinUrl`.
+
+```bash
+curl -X POST https://linkedinreveng-api.vercel.app/api/v1/profiles \
+  -H "Content-Type: application/json" \
+  -d '{
+    "linkedinUrl": "https://www.linkedin.com/in/ankur-bhadauria-786487230/"
+  }'
+```
+
+Or in JavaScript:
+
+```javascript
+const response = await fetch(
+  "https://linkedinreveng-api.vercel.app/api/v1/profiles",
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      linkedinUrl: "https://www.linkedin.com/in/ankur-bhadauria-786487230/",
+    }),
+  },
+);
+
+const result = await response.json();
+```
+
 ### `GET /api/v1/profile-image`
 
 The profile response includes a `profileImage.proxyPath` when an image is available. The frontend uses this API route to render the image through the authenticated backend; it does not expose LinkedIn cookies to the browser.

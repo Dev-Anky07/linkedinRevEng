@@ -40,6 +40,21 @@ def is_linkedin_media_url(image_url: str) -> bool:
     parsed = urlparse(image_url)
     return parsed.scheme == "https" and parsed.hostname == LINKEDIN_MEDIA_HOST and parsed.port is None
 
+
+@app.get("/")
+def api_landing() -> dict[str, object]:
+    return {
+        "name": "Profilely API",
+        "version": "0.1.0",
+        "docs": "/docs",
+        "health": "/health",
+        "demo": "https://linkedinrevengweb.vercel.app/",
+        "profileLookup": {
+            "method": "POST",
+            "path": "/api/v1/profiles",
+        },
+    }
+
 @app.get("/health")
 def health() -> dict[str, str]:
     try:
