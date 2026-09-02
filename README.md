@@ -4,7 +4,7 @@ Profilely is a small full-stack LinkedIn profile lookup tool. It accepts a publi
 
 The repository contains two deployable applications:
 
-- `src/` — Vite + React frontend.
+- `frontend/` — Vite + React frontend.
 - `backend/` — FastAPI API and encrypted Redis session management.
 
 ## Current response coverage
@@ -25,6 +25,7 @@ Copy `.env.example` to `.env.local` and fill in the values:
 
 ```bash
 cp .env.example .env.local
+cp frontend/.env.example frontend/.env.local
 ```
 
 Required server-side values:
@@ -61,6 +62,7 @@ curl http://127.0.0.1:8000/health
 ### 4. Run the frontend
 
 ```bash
+cd frontend
 npm install
 npm run dev
 ```
@@ -139,7 +141,7 @@ Deploy the same GitHub repository as **two Vercel projects**.
 
 ### Frontend project
 
-- Root Directory: repository root
+- Root Directory: `frontend`
 - Framework: Vite
 - Build Command: `npm run build`
 - Output Directory: `dist`
