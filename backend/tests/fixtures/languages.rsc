@@ -1,0 +1,7 @@
+6:["$","$Ld",null,{"textProps":{"children":["Languages"]}}]
+7:["$","p",null,{"className":"language-name","children":["English"]}]
+8:["$","p",null,{"className":"language-proficiency","children":["Native or bilingual proficiency"]}]
+9:["$","p",null,{"className":"language-name","children":["German"]}]
+a:["$","p",null,{"className":"language-proficiency","children":["Limited working proficiency"]}]
+b:["$","p",null,{"className":"language-name","children":["Hindi"]}]
+c:["$","p",null,{"className":"language-proficiency","children":["Native or bilingual proficiency"]}]

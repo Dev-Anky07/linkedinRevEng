@@ -1,0 +1,35 @@
+spec_version: 1
+name: code-review-openenv
+version: 0.1.0
+description: >-
+  Real-world code-review environment with three graded pull-request tasks (style/docs, correctness, security/perf),
+  shaped rewards, and FastAPI server exposing reset/step/state endpoints.
+entrypoint: uvicorn code_review_env.server.app:app --host 0.0.0.0 --port 8000
+port: 8000
+
+observation_model: code_review_env.models.Observation
+action_model: code_review_env.models.Action
+state_model: code_review_env.models.EnvState
+
+# Metadata for the three tasks
+tasks:
+  - id: easy_style_docs
+    difficulty: easy
+    summary: Style/doc review on renamed function
+    max_steps: 3
+  - id: medium_logic_correctness
+    difficulty: medium
+    summary: Pagination off-by-one and robustness
+    max_steps: 3
+  - id: hard_security_perf
+    difficulty: hard
+    summary: SQL injection + N+1 query detection
+    max_steps: 3
+
+maintainer: "Ankur Bhadauria <dev@ankurbhadauria.com>"
+hf_space: true
+tags:
+  - openenv
+  - code-review
+  - fastapi
+  - security
